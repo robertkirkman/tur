@@ -1,0 +1,15 @@
+--- a/mk/cmake/SuperTux/ProvideSDL2_ttf.cmake
++++ b/mk/cmake/SuperTux/ProvideSDL2_ttf.cmake
+@@ -8,10 +8,10 @@ if (EMSCRIPTEN)
+   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -sUSE_SDL_TTF=2")
+   set(CMAKE_LINKER_FLAGS "${CMAKE_LINKER_FLAGS} -sUSE_SDL_TTF=2")
+   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -sUSE_SDL_TTF=2")
+-elseif(TARGET SDL2_ttf)
++elseif(TARGET SDL2_ttf::SDL2_ttf)
+   message(STATUS "Found preinstalled SDL2_ttf")
+ 
+-  add_library(LibSDL2_ttf ALIAS SDL2_ttf)
++  add_library(LibSDL2_ttf ALIAS SDL2_ttf::SDL2_ttf)
+ else()
+   message(STATUS "Could NOT find SDL2_ttf, using external/SDL_ttf fallback")
+ 

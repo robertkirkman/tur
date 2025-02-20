@@ -1,0 +1,675 @@
+This is https://github.com/SuperTux/supertux/pull/3021 ,
+slightly rebased and adapted to Termux:X11,
+which enables and fixes supertux's touchscreen buttons
+on non-SurfaceFlinger(ANativeWindow) platforms.
+
+--- a/src/control/mobile_controller.cpp
++++ b/src/control/mobile_controller.cpp
+@@ -86,20 +86,15 @@ MobileController::draw(DrawingContext& context)
+ 
+   if (m_screen_width != static_cast<int>(context.get_width()) ||
+       m_screen_height != static_cast<int>(context.get_height()) ||
+-      m_mobile_controls_scale != g_config->m_mobile_controls_scale)
++      m_mobile_controls_scale != g_config->mobile_controls_scale)
+   {
+     m_screen_width = static_cast<int>(context.get_width());
+     m_screen_height = static_cast<int>(context.get_height());
+     float width = static_cast<float>(m_screen_width);
+     float height = static_cast<float>(m_screen_height);
+-    m_mobile_controls_scale = g_config->m_mobile_controls_scale;
+-    // Buttons on Android are bigger, and direction buttons are extra wide
++    m_mobile_controls_scale = g_config->mobile_controls_scale;
+     // Use screen height to calculate button size, because 20:9 screen ratios are common
+-#ifdef __ANDROID__
+-    const float BUTTON_SCALE = 0.4f * g_config->m_mobile_controls_scale;
+-#else
+-    const float BUTTON_SCALE = 0.2f * g_config->m_mobile_controls_scale;
+-#endif
++    const float BUTTON_SCALE = 0.05f * static_cast<float>(g_config->mobile_controls_scale);
+     m_rect_directions.set_size(height * BUTTON_SCALE * 4 / 3, height * BUTTON_SCALE);
+     m_rect_directions.set_pos(Vector(0, height - height * BUTTON_SCALE));
+     m_draw_directions = Rectf::from_center(m_rect_directions.get_middle(),
+--- a/src/control/mobile_controller.hpp
++++ b/src/control/mobile_controller.hpp
+@@ -63,7 +63,7 @@ private:
+                    m_tex_jump, m_tex_action, m_tex_cheats, m_tex_debug;
+ 
+   int m_screen_width, m_screen_height;
+-  float m_mobile_controls_scale;
++  int m_mobile_controls_scale;
+ 
+ private:
+   MobileController(const MobileController&) = delete;
+--- /dev/null
++++ b/src/gui/item_slider.cpp
+@@ -0,0 +1,159 @@
++//  SuperTux
++//  Copyright (C) 2024 Vankata453
++//
++//  This program is free software: you can redistribute it and/or modify
++//  it under the terms of the GNU General Public License as published by
++//  the Free Software Foundation, either version 3 of the License, or
++//  (at your option) any later version.
++//
++//  This program is distributed in the hope that it will be useful,
++//  but WITHOUT ANY WARRANTY; without even the implied warranty of
++//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++//  GNU General Public License for more details.
++//
++//  You should have received a copy of the GNU General Public License
++//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++#include "gui/item_slider.hpp"
++
++#include "gui/menu_manager.hpp"
++#include "supertux/gameconfig.hpp"
++#include "supertux/globals.hpp"
++#include "supertux/resources.hpp"
++#include "video/color.hpp"
++#include "video/drawing_context.hpp"
++#include "video/video_system.hpp"
++#include "video/viewport.hpp"
++
++static const float SLIDER_WIDTH = 100.f;
++
++ItemSlider::ItemSlider(const std::string& text, int min_value, int max_value, int* value,
++                       const std::string& value_append, int step, int id) :
++  MenuItem(text, id),
++  m_min_value(min_value),
++  m_max_value(max_value),
++  m_value(value),
++  m_value_append(value_append),
++  m_step(step),
++  m_slider_x(-SLIDER_WIDTH), // Will be set in draw().
++  m_sliding(false)
++{
++  assert(m_min_value < m_max_value);
++}
++
++void
++ItemSlider::draw(DrawingContext& context, const Vector& pos, int menu_width, bool active)
++{
++  assert(*m_value >= m_min_value && *m_value <= m_max_value);
++
++  const float value_text_width = Resources::normal_font->get_text_width(std::to_string(m_max_value) + m_value_append);
++
++  context.color().draw_text(Resources::normal_font, get_text(),
++                              Vector(pos.x + 16.f,
++                                     pos.y - Resources::normal_font->get_height() / 2.f),
++                              ALIGN_LEFT, LAYER_GUI, active ? g_config->activetextcolor : get_color());
++
++  m_slider_x = pos.x + static_cast<float>(menu_width) - SLIDER_WIDTH - value_text_width - 32.f;
++  context.color().draw_filled_rect(Rectf(Vector(m_slider_x, pos.y - 1.f),
++                                         Vector(pos.x + static_cast<float>(menu_width) - value_text_width - 32.f, pos.y + 1.f)),
++                                         active ? Color::BLACK : get_color(), LAYER_GUI);
++
++  const float slider_indicator_x = m_slider_x + (static_cast<float>(*m_value - m_min_value) / static_cast<float>(m_max_value - m_min_value)) * SLIDER_WIDTH;
++  context.color().draw_filled_rect(Rectf(Vector(slider_indicator_x - 2.f, pos.y - Resources::normal_font->get_height() / 2 + 1.f),
++                                         Vector(slider_indicator_x + 2.f, pos.y + Resources::normal_font->get_height() / 2 - 1.f)),
++                                   active ? Color::BLACK : get_color(), LAYER_GUI);
++
++  context.color().draw_text(Resources::normal_font, std::to_string(*m_value) + m_value_append,
++                            Vector(pos.x + static_cast<float>(menu_width) - 16.f,
++                                   pos.y - Resources::normal_font->get_height() / 2.f),
++                            ALIGN_RIGHT, LAYER_GUI, active ? g_config->activetextcolor : get_color());
++}
++
++int
++ItemSlider::get_width() const
++{
++  const float value_text_width = Resources::normal_font->get_text_width(std::to_string(m_max_value) + m_value_append);
++  return static_cast<int>(Resources::normal_font->get_text_width(get_text()) + SLIDER_WIDTH + value_text_width + 48.f);
++}
++
++void
++ItemSlider::event(const SDL_Event& ev)
++{
++  switch (ev.type)
++  {
++    case SDL_MOUSEBUTTONDOWN:
++    {
++      if (ev.button.button != SDL_BUTTON_LEFT)
++        break;
++
++      const Vector mouse_pos = VideoSystem::current()->get_viewport().to_logical(ev.motion.x, ev.motion.y);
++      if (mouse_pos.x >= m_slider_x && mouse_pos.x <= m_slider_x + SLIDER_WIDTH)
++      {
++        move_indicator(mouse_pos);
++        m_sliding = true;
++
++        MenuManager::instance().current_menu()->menu_action(*this);
++      }
++      break;
++    }
++
++    case SDL_MOUSEBUTTONUP:
++      if (ev.button.button == SDL_BUTTON_LEFT)
++        m_sliding = false;
++      break;
++
++    case SDL_MOUSEMOTION:
++    {
++      if (!m_sliding)
++        break;
++
++      const Vector mouse_pos = VideoSystem::current()->get_viewport().to_logical(ev.motion.x, ev.motion.y);
++      move_indicator(mouse_pos);
++
++      MenuManager::instance().current_menu()->menu_action(*this);
++      break;
++    }
++
++    case SDL_KEYDOWN:
++      if (ev.key.keysym.sym == SDLK_LEFT)
++      {
++        *m_value = std::max(*m_value - m_step, m_min_value);
++        MenuManager::instance().current_menu()->menu_action(*this);
++      }
++      else if (ev.key.keysym.sym == SDLK_RIGHT)
++      {
++        *m_value = std::min(*m_value + m_step, m_max_value);
++        MenuManager::instance().current_menu()->menu_action(*this);
++      }
++      break;
++
++    case SDL_MOUSEWHEEL:
++      if (ev.wheel.y == 0)
++        break;
++
++      if (ev.wheel.y < 0)
++        *m_value = std::max(*m_value + ev.wheel.y * m_step, m_min_value);
++      else
++        *m_value = std::min(*m_value + ev.wheel.y * m_step, m_max_value);
++
++      MenuManager::instance().current_menu()->menu_action(*this);
++      break;
++
++    default:
++      break;
++  }
++}
++
++void
++ItemSlider::move_indicator(const Vector& pos)
++{
++  if (pos.x <= m_slider_x)
++    *m_value = m_min_value;
++  else if (pos.x >= m_slider_x + SLIDER_WIDTH)
++    *m_value = m_max_value;
++  else
++    *m_value = static_cast<int>(((pos.x - m_slider_x) / SLIDER_WIDTH) * static_cast<float>(m_max_value - m_min_value)) + m_min_value;
++}
++
++/* EOF */
++
+--- /dev/null
++++ b/src/gui/item_slider.hpp
+@@ -0,0 +1,61 @@
++//  SuperTux
++//  Copyright (C) 2024 Vankata453
++//
++//  This program is free software: you can redistribute it and/or modify
++//  it under the terms of the GNU General Public License as published by
++//  the Free Software Foundation, either version 3 of the License, or
++//  (at your option) any later version.
++//
++//  This program is distributed in the hope that it will be useful,
++//  but WITHOUT ANY WARRANTY; without even the implied warranty of
++//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++//  GNU General Public License for more details.
++//
++//  You should have received a copy of the GNU General Public License
++//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++#ifndef HEADER_SUPERTUX_GUI_ITEM_SLIDER_HPP
++#define HEADER_SUPERTUX_GUI_ITEM_SLIDER_HPP
++
++#include "gui/menu_item.hpp"
++
++class ItemSlider final : public MenuItem
++{
++public:
++  ItemSlider(const std::string& text, int min_value, int max_value, int* value,
++             const std::string& value_append = {}, int step = 1, int id = -1);
++
++  /** Draws the menu item. */
++  void draw(DrawingContext&, const Vector& pos, int menu_width, bool active) override;
++
++  /** Processes the menu action. */
++  void event(const SDL_Event& ev) override;
++
++  /** Returns the minimum width of the menu item. */
++  int get_width() const override;
++
++  bool changes_width() const override { return false; }
++  bool locks_selection() const override { return m_sliding; }
++
++private:
++  void move_indicator(const Vector& pos);
++
++private:
++  int m_min_value;
++  int m_max_value;
++  int* m_value;
++  const std::string m_value_append;
++  const int m_step;
++
++  float m_slider_x;
++  bool m_sliding;
++
++private:
++  ItemSlider(const ItemSlider&) = delete;
++  ItemSlider& operator=(const ItemSlider&) = delete;
++};
++
++#endif
++
++/* EOF */
++
+--- a/src/gui/menu.cpp
++++ b/src/gui/menu.cpp
+@@ -34,6 +34,7 @@
+ #include "gui/item_paths.hpp"
+ #include "gui/item_script.hpp"
+ #include "gui/item_script_line.hpp"
++#include "gui/item_slider.hpp"
+ #include "gui/item_stringselect.hpp"
+ #include "gui/item_textfield.hpp"
+ #include "gui/item_list.hpp"
+@@ -320,6 +321,13 @@ Menu::add_horizontalmenu(int id, float height, float min_item_width)
+   return add_item<ItemHorizontalMenu>(id, height, min_item_width);
+ }
+ 
++ItemSlider&
++Menu::add_slider(const std::string& text, int min_value, int max_value, int* value,
++                 const std::string& value_append, int step, int id)
++{
++  return add_item<ItemSlider>(text, min_value, max_value, value, value_append, step, id);
++}
++
+ void
+ Menu::clear()
+ {
+@@ -369,6 +377,9 @@ Menu::process_action(const MenuAction& action)
+ 
+   switch (action) {
+     case MenuAction::UP:
++      if (m_items[m_active_item]->locks_selection())
++        return;
++
+       do {
+         if (m_active_item > 0)
+           --m_active_item;
+@@ -379,6 +390,9 @@ Menu::process_action(const MenuAction& action)
+       break;
+ 
+     case MenuAction::DOWN:
++      if (m_items[m_active_item]->locks_selection())
++        return;
++
+       do {
+         if (m_active_item < int(m_items.size())-1 )
+           ++m_active_item;
+@@ -608,6 +622,9 @@ Menu::event(const SDL_Event& ev)
+ 
+     case SDL_MOUSEMOTION:
+     {
++      if (m_items[m_active_item]->locks_selection())
++        break;
++
+       Vector mouse_pos = VideoSystem::current()->get_viewport().to_logical(ev.motion.x, ev.motion.y);
+       float x = mouse_pos.x;
+       float y = mouse_pos.y;
+--- a/src/gui/menu.hpp
++++ b/src/gui/menu.hpp
+@@ -42,6 +42,7 @@ class ItemIntField;
+ class ItemLabel;
+ class ItemPaths;
+ class ItemScript;
++class ItemSlider;
+ class ItemList;
+ class ItemStringSelect;
+ class ItemTextField;
+@@ -109,6 +110,8 @@ public:
+   ItemImages& add_images(const std::vector<std::string>& image_paths, int max_image_width = 0, int max_image_height = 0, int id = -1);
+   ItemList& add_list(const std::string& text, const std::vector<std::string>& items, std::string* value_ptr, int id = -1);
+   ItemHorizontalMenu& add_horizontalmenu(int id, float height, float min_item_width = -1.f);
++  ItemSlider& add_slider(const std::string& text, int min_value, int max_value, int* value,
++                         const std::string& value_append = {}, int step = 1, int id = -1);
+ 
+   /** Remove all entries from the menu */
+   void clear();
+--- a/src/gui/menu_item.hpp
++++ b/src/gui/menu_item.hpp
+@@ -73,6 +73,9 @@ public:
+     return false;
+   }
+ 
++  /** Returns true when the menu shouldn't move the selection from this item. */
++  virtual bool locks_selection() const { return false; }
++
+   /** Returns true when the width must be recalculated when an action is
+       processed */
+   virtual bool changes_width() const {
+--- a/src/supertux/gameconfig.cpp
++++ b/src/supertux/gameconfig.cpp
+@@ -70,8 +70,8 @@ Config::Config() :
+   locale(),
+   keyboard_config(),
+   joystick_config(),
+-  mobile_controls(SDL_GetNumTouchDevices() > 0),
+-  m_mobile_controls_scale(1),
++  mobile_controls(true),
++  mobile_controls_scale(4),
+   addons(),
+   developer_mode(false),
+   christmas_mode(false),
+@@ -321,8 +321,8 @@ Config::load()
+       joystick_config.read(*joystick_mapping);
+     }
+ 
+-    config_control_mapping->get("mobile_controls", mobile_controls, SDL_GetNumTouchDevices() > 0);
+-    config_control_mapping->get("mobile_controls_scale", m_mobile_controls_scale, 1);
++    config_control_mapping->get("mobile_controls", mobile_controls, true);
++    config_control_mapping->get("mobile_controls_scale", mobile_controls_scale);
+   }
+ 
+   std::optional<ReaderCollection> config_addons_mapping;
+@@ -474,7 +474,7 @@ Config::save()
+     writer.end_list("joystick");
+ 
+     writer.write("mobile_controls", mobile_controls);
+-    writer.write("mobile_controls_scale", m_mobile_controls_scale);
++    writer.write("mobile_controls_scale", mobile_controls_scale);
+   }
+   writer.end_list("control");
+ 
+@@ -511,6 +511,10 @@ void
+ Config::check_values()
+ {
+   camera_peek_multiplier = math::clamp(camera_peek_multiplier, 0.f, 1.f);
++  sound_volume = math::clamp(sound_volume, 0, 100);
++  music_volume = math::clamp(music_volume, 0, 100);
++  flash_intensity = math::clamp(flash_intensity, 0, 100);
++  mobile_controls_scale = math::clamp(mobile_controls_scale, 4, 12);
+ }
+ 
+ bool
+--- a/src/supertux/gameconfig.hpp
++++ b/src/supertux/gameconfig.hpp
+@@ -97,7 +97,7 @@ public:
+   JoystickConfig joystick_config;
+ 
+   bool mobile_controls;
+-  float m_mobile_controls_scale;
++  int mobile_controls_scale;
+ 
+   struct Addon
+   {
+--- a/src/supertux/menu/options_menu.cpp
++++ b/src/supertux/menu/options_menu.cpp
+@@ -21,6 +21,8 @@
+ #include "gui/dialog.hpp"
+ #include "gui/item_floatfield.hpp"
+ #include "gui/item_goto.hpp"
++#include "gui/item_intfield.hpp"
++#include "gui/item_slider.hpp"
+ #include "gui/item_stringselect.hpp"
+ #include "gui/item_toggle.hpp"
+ #include "gui/menu_item.hpp"
+@@ -62,11 +64,7 @@ OptionsMenu::OptionsMenu(Type type, bool complete) :
+   m_aspect_ratios(),
+   m_window_resolutions(),
+   m_resolutions(),
+-  m_vsyncs(),
+-  m_sound_volumes(),
+-  m_music_volumes(),
+-  m_flash_intensity_values(),
+-  m_mobile_control_scales()
++  m_vsyncs()
+ {
+   refresh();
+ }
+@@ -123,7 +121,8 @@ OptionsMenu::refresh()
+       add_toggle(MNID_FRAME_PREDICTION, _("Frame prediction"), &g_config->frame_prediction)
+         .set_help(_("Smooth camera motion, generating intermediate frames. This has a noticeable effect on monitors at >> 60Hz. Moving objects may be blurry."));
+ 
+-      add_flash_intensity();
++      add_slider(_("Flash Intensity"), 0, 100, &g_config->flash_intensity, "%", 5, MNID_FLASH_INTENSITY)
++        .set_help(_("Adjust the intensity of the flash, produced by thunderstorms"));
+ 
+ #if !defined(HIDE_NONMOBILE_OPTIONS) && !defined(__EMSCRIPTEN__)
+       add_aspect_ratio();
+@@ -148,8 +147,10 @@ OptionsMenu::refresh()
+         add_toggle(MNID_MUSIC, _("Music"), &g_config->music_enabled)
+           .set_help(_("Disable all music"));
+ 
+-        add_sound_volume();
+-        add_music_volume();
++        add_slider(_("Sound Volume"), 0, 100, &g_config->sound_volume, "%", 5, MNID_SOUND_VOLUME)
++          .set_help(_("Adjust sound volume"));
++        add_slider(_("Music Volume"), 0, 100, &g_config->music_volume, "%", 5, MNID_MUSIC_VOLUME)
++          .set_help(_("Adjust music volume"));
+       }
+       else
+       {
+@@ -177,6 +178,12 @@ OptionsMenu::refresh()
+         .set_help(_("Configure joystick control-action mappings"));
+ #endif
+ 
++      add_toggle(MNID_MOBILE_CONTROLS, _("On-screen controls"), &g_config->mobile_controls)
++        .set_help(_("Toggle on-screen controls"));
++
++      add_slider(_("On-screen controls scale"), 4, 12, &g_config->mobile_controls_scale, "", 1, MNID_MOBILE_CONTROLS_SCALE)
++        .set_help(_("Configure the scale of on-screen controls"));
++
+       break;
+     }
+ 
+@@ -455,127 +462,6 @@ OptionsMenu::add_vsync()
+     .set_help(_("Set the VSync mode"));
+ }
+ 
+-void
+-OptionsMenu::add_sound_volume()
+-{
+-  m_sound_volumes.list = { "0%", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%" };
+-
+-  std::ostringstream sound_vol_stream;
+-  sound_vol_stream << g_config->sound_volume << "%";
+-  std::string sound_vol_string = sound_vol_stream.str();
+-
+-  if (std::find(m_sound_volumes.list.begin(),
+-                m_sound_volumes.list.end(), sound_vol_string) == m_sound_volumes.list.end())
+-  {
+-    m_sound_volumes.list.push_back(sound_vol_string);
+-  }
+-
+-  std::sort(m_sound_volumes.list.begin(), m_sound_volumes.list.end(), less_than_volume);
+-
+-  std::ostringstream out;
+-  out << g_config->sound_volume << "%";
+-  std::string sound_volume = out.str();
+-  int count = 0;
+-  for (const auto& volume : m_sound_volumes.list)
+-  {
+-    if (volume == sound_volume)
+-    {
+-      sound_volume.clear();
+-      m_sound_volumes.next = count;
+-      break;
+-    }
+-    ++count;
+-  }
+-
+-  add_string_select(MNID_SOUND_VOLUME, _("Sound Volume"), &m_sound_volumes.next, m_sound_volumes.list)
+-    .set_help(_("Adjust sound volume"));
+-}
+-
+-void
+-OptionsMenu::add_music_volume()
+-{
+-  m_music_volumes.list = { "0%", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%" };
+-
+-  std::ostringstream music_vol_stream;
+-  music_vol_stream << g_config->music_volume << "%";
+-  std::string music_vol_string = music_vol_stream.str();
+-
+-  if (std::find(m_music_volumes.list.begin(),
+-               m_music_volumes.list.end(), music_vol_string) == m_music_volumes.list.end())
+-  {
+-    m_music_volumes.list.push_back(music_vol_string);
+-  }
+-
+-  std::sort(m_music_volumes.list.begin(), m_music_volumes.list.end(), less_than_volume);
+-
+-  std::ostringstream out;
+-  out << g_config->music_volume << "%";
+-  std::string music_volume = out.str();
+-  int count = 0;
+-  for (const auto& volume : m_music_volumes.list)
+-  {
+-    if (volume == music_volume)
+-    {
+-      music_volume.clear();
+-      m_music_volumes.next = count;
+-      break;
+-    }
+-    ++count;
+-  }
+-
+-  add_string_select(MNID_MUSIC_VOLUME, _("Music Volume"), &m_music_volumes.next, m_music_volumes.list)
+-    .set_help(_("Adjust music volume"));
+-}
+-
+-void
+-OptionsMenu::add_flash_intensity()
+-{
+-  m_flash_intensity_values.list = { "0%", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%" };
+-
+-  std::ostringstream flash_intensity_value_stream;
+-  flash_intensity_value_stream << g_config->flash_intensity << "%";
+-  std::string flash_intensity_string = flash_intensity_value_stream.str();
+-
+-  if (std::find(m_flash_intensity_values.list.begin(),
+-    m_flash_intensity_values.list.end(), flash_intensity_string) == m_flash_intensity_values.list.end())
+-  {
+-    m_flash_intensity_values.list.push_back(flash_intensity_string);
+-  }
+-
+-  std::sort(m_flash_intensity_values.list.begin(), m_flash_intensity_values.list.end(), less_than_volume);
+-
+-  std::ostringstream out;
+-  out << g_config->flash_intensity << "%";
+-  std::string flash_intensity_value = out.str();
+-  int count = 0;
+-  for (const auto& value : m_flash_intensity_values.list)
+-  {
+-    if (value == flash_intensity_value)
+-    {
+-      flash_intensity_value.clear();
+-      m_flash_intensity_values.next = count;
+-      break;
+-    }
+-    ++count;
+-  }
+-
+-  add_string_select(MNID_FLASH_INTENSITY, _("Flash Intensity"), &m_flash_intensity_values.next, m_flash_intensity_values.list)
+-    .set_help(_("Adjust the intensity of the flash produced by the thunderstorm"));
+-}
+-
+-void
+-OptionsMenu::add_mobile_control_scales()
+-{
+-  for (unsigned i = 50; i <= 300; i += 25)
+-  {
+-    m_mobile_control_scales.list.push_back(std::to_string(i) + "%");
+-    if (i == static_cast<unsigned>(g_config->m_mobile_controls_scale * 100))
+-      m_mobile_control_scales.next = (i - 50) / 25;
+-  }
+-
+-  add_string_select(MNID_MOBILE_CONTROLS_SCALE, _("On-screen controls scale"), &m_mobile_control_scales.next, m_mobile_control_scales.list);
+-}
+-
+ void
+ OptionsMenu::on_window_resize()
+ {
+@@ -735,13 +621,9 @@ OptionsMenu::menu_action(MenuItem& item)
+       break;
+ 
+     case MNID_SOUND_VOLUME:
+-      if (sscanf(m_sound_volumes.list[m_sound_volumes.next].c_str(), "%i", &g_config->sound_volume) == 1)
+-      {
+-        bool sound_enabled = g_config->sound_volume > 0 ? true : false;
+-        SoundManager::current()->enable_sound(sound_enabled);
+-        SoundManager::current()->set_sound_volume(g_config->sound_volume);
+-        g_config->save();
+-      }
++      SoundManager::current()->enable_sound(g_config->sound_enabled);
++      SoundManager::current()->set_sound_volume(g_config->sound_volume);
++      g_config->save();
+       break;
+ 
+     case MNID_MUSIC:
+@@ -750,20 +632,9 @@ OptionsMenu::menu_action(MenuItem& item)
+       break;
+ 
+     case MNID_MUSIC_VOLUME:
+-      if (sscanf(m_music_volumes.list[m_music_volumes.next].c_str(), "%i", &g_config->music_volume) == 1)
+-      {
+-        bool music_enabled = g_config->music_volume > 0 ? true : false;
+-        SoundManager::current()->enable_music(music_enabled);
+-        SoundManager::current()->set_music_volume(g_config->music_volume);
+-        g_config->save();
+-      }
+-      break;
+-
+-    case MNID_FLASH_INTENSITY:
+-      if (sscanf(m_flash_intensity_values.list[m_flash_intensity_values.next].c_str(), "%i", &g_config->flash_intensity) == 1)
+-      {
+-        g_config->save();
+-      }
++      SoundManager::current()->enable_music(g_config->music_enabled);
++      SoundManager::current()->set_music_volume(g_config->music_volume);
++      g_config->save();
+       break;
+ 
+     case MNID_CUSTOM_TITLE_LEVELS:
+@@ -774,13 +645,6 @@ OptionsMenu::menu_action(MenuItem& item)
+       SDL_ShowCursor(g_config->custom_mouse_cursor ? 0 : 1);
+       break;
+ 
+-    case MNID_MOBILE_CONTROLS_SCALE:
+-      if (sscanf(m_mobile_control_scales.list[m_mobile_control_scales.next].c_str(), "%f", &g_config->m_mobile_controls_scale) == EOF)
+-        g_config->m_mobile_controls_scale = 1; // if sscanf fails revert to default scale
+-      else
+-        g_config->m_mobile_controls_scale /= 100.0f;
+-      break;
+-
+     case MNID_DISABLE_NETWORK:
+       refresh();
+       set_active_item(MNID_DISABLE_NETWORK);
+--- a/src/supertux/menu/options_menu.hpp
++++ b/src/supertux/menu/options_menu.hpp
+@@ -52,10 +52,6 @@ private:
+   void add_window_resolutions();
+   void add_resolutions();
+   void add_vsync();
+-  void add_sound_volume();
+-  void add_music_volume();
+-  void add_flash_intensity();
+-  void add_mobile_control_scales();
+ 
+ private:
+   enum MenuIDs {
+@@ -102,10 +98,6 @@ private:
+   StringOption m_window_resolutions;
+   StringOption m_resolutions;
+   StringOption m_vsyncs;
+-  StringOption m_sound_volumes;
+-  StringOption m_music_volumes;
+-  StringOption m_flash_intensity_values;
+-  StringOption m_mobile_control_scales;
+ 
+ private:
+   OptionsMenu(const OptionsMenu&) = delete;
