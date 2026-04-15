@@ -1,8 +1,5 @@
 TERMUX_PKG_HOMEPAGE=https://hnefatafl.org/
-# It's suspected that the discord URL being in the description of packages makes the upstream developer happy
-# (speculatively, because it might increase their bug report coverage)
-# is something like that acceptable to Termux?
-TERMUX_PKG_DESCRIPTION="Copenhagen Hnefatafl client. Discord: https://discord.gg/h56CAHEBXd"
+TERMUX_PKG_DESCRIPTION="Copenhagen Hnefatafl client, engine, server and artificial intelligence"
 TERMUX_PKG_LICENSE="AGPL-V3"
 TERMUX_PKG_MAINTAINER="@termux"
 TERMUX_PKG_VERSION="5.6.1-2"
